@@ -155,6 +155,8 @@ html.hc .card,html.hc .dish,html.hc .cell{border-width:2px}
       <button class="btn" id="find" type="button">검색</button>
     </div>
     <div class="results" id="results"></div>
+    <button class="btn ghost" id="demo" type="button" style="margin-top:12px">샘플 데이터로 둘러보기</button>
+    <div class="msg">인터넷이나 인증키 문제로 학교 정보를 못 불러올 때, 가짜 예시 데이터로 앱을 체험할 수 있어요.</div>
   </section>
 
   <div id="main" hidden>
@@ -173,8 +175,7 @@ html.hc .card,html.hc .dish,html.hc .cell{border-width:2px}
 </div>
 
 <script>
-// 나이스 교육정보 개방 포털(open.neis.go.kr)에서 발급받은 인증키를 아래 따옴표 안에 붙여 넣으세요.
-const NEIS_KEY = "3d356c433d3d4b2fac9f4a40f0a488ee";
+let NEIS_KEY = ""; // 인증키는 코드에 넣지 않아요. 앱의 [생활 > 설정]에서 입력하면 그 기기에만 저장돼요.
 
 // 알레르기 번호표: 1~13번은 식약처·학교급식 표시 기준 자료의 순서와 일치함을 확인했어요. 14~19번은 나이스 공식 안내와 꼭 비교해 보세요.
 const ALG = ["","난류","우유","메밀","땅콩","대두","밀","고등어","게","새우","돼지고기","복숭아","토마토","아황산류","호두","닭고기","쇠고기","오징어","조개류","잣"];
@@ -184,7 +185,9 @@ const store = {
   get(k, d){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch(e){ return d; } },
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
 };
+NEIS_KEY = store.get("neisKey", "");
 let school = store.get("school", null);
+let demo = false;
 let myAlg = store.get("alg", []);
 let taste = store.get("taste", {});
 let diary = store.get("diary", {});
@@ -198,7 +201,27 @@ const ymd = d => d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + Stri
 const dayName = d => "일월화수목금토"[d.getDay()];
 const fromYmd = s => new Date(+s.slice(0,4), +s.slice(4,6)-1, +s.slice(6,8));
 
+function demoRows(name, p){
+  const days = (a, b) => { const out = [], d = fromYmd(a), e = fromYmd(b); for (; d <= e; d.setDate(d.getDate() + 1)) out.push(new Date(d)); return out; };
+  const wk = d => d.getDay() % 6 !== 0, add = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+  if (name === "mealServiceDietInfo"){
+    const M = [
+      ["쌀밥", "된장찌개 (5.6.13)", "제육볶음 (5.6.10)", "시금치나물", "배추김치 (9)"],
+      ["잡곡밥", "미역국 (5.6.16)", "치킨너겟 (1.2.5.6.15)", "브로콜리 무침", "깍두기 (9)"],
+      ["카레라이스 (2.5.6.10)", "달걀국 (1)", "단무지", "과일 샐러드 (2)", "우유 (2)"],
+      ["김치볶음밥 (1.5.6.10)", "어묵국 (1.5.6)", "군만두 (1.5.6.10)", "총각김치 (9)", "요구르트 (2)"]
+    ];
+    return days(p.MLSV_FROM_YMD, p.MLSV_TO_YMD).filter(wk).map(d => ({MLSV_YMD: ymd(d), DDISH_NM: M[d.getDate() % M.length].join("<br/>"), CAL_INFO: (620 + (d.getDate() * 37) % 260) + ".0 Kcal", NTR_INFO: "탄수화물(g) : " + (90 + d.getDate() % 25) + ".0<br/>단백질(g) : " + (24 + d.getDate() % 9) + ".0<br/>지방(g) : " + (14 + d.getDate() % 8) + ".0"}));
+  }
+  if (name === "SchoolSchedule") return [[2, "학부모 상담 주간"], [9, "체육대회"], [16, "독서 행사"]].map(x => ({AA_YMD: add(x[0]), EVENT_NM: x[1]}));
+  if (/Timetable$/.test(name)){
+    const T = [["국어", "수학", "영어", "체육", "과학", "역사"], ["수학", "영어", "국어", "음악", "사회", "기술"], ["영어", "국어", "과학", "수학", "미술", "도덕"], ["과학", "체육", "수학", "국어", "영어", "정보"], ["사회", "국어", "영어", "수학", "창체", "창체"]];
+    return days(p.TI_FROM_YMD, p.TI_TO_YMD).filter(wk).flatMap(d => T[d.getDay() - 1].map((x, i) => ({ALL_TI_YMD: ymd(d), PERIO: String(i + 1), ITRT_CNTNT: x})));
+  }
+  return [];
+}
 async function neis(name, params){
+  if (demo) return demoRows(name, params);
   // 인증키가 없으면 나이스는 한 번에 최대 5건만 돌려줘요.
   const p = new URLSearchParams({Type:"json", pSize: NEIS_KEY ? "100" : "5", ...params});
   if (NEIS_KEY) p.set("KEY", NEIS_KEY);
@@ -209,6 +232,16 @@ async function neis(name, params){
   const r = data.RESULT || (data[name] && data[name][0] && data[name][0].head && data[name][0].head[1] && data[name][0].head[1].RESULT);
   if (r && r.CODE && r.CODE !== "INFO-000" && r.CODE !== "INFO-200") throw new Error(r.CODE + " " + r.MESSAGE);
   return [];
+}
+
+// 키가 없으면 나이스는 한 번에 5건까지만 줘요. 5건이 오면 날짜 범위를 반으로 나눠서 다시 요청해 모두 모아요.
+async function neisR(name, params, kf, kt, a, b){
+  const rows = await neis(name, {...params, [kf]: a, [kt]: b});
+  if (NEIS_KEY || demo || rows.length < 5 || a >= b) return rows;
+  const d1 = fromYmd(a), n = Math.round((fromYmd(b) - d1) / 86400000), m = new Date(d1); m.setDate(d1.getDate() + Math.floor(n / 2));
+  const m2 = new Date(m); m2.setDate(m.getDate() + 1);
+  const parts = await Promise.all([neisR(name, params, kf, kt, a, ymd(m)), neisR(name, params, kf, kt, ymd(m2), b)]);
+  return parts[0].concat(parts[1]);
 }
 
 function parseMenu(r){
@@ -236,9 +269,10 @@ async function search(){
       const b = document.createElement("button");
       b.type = "button";
       b.innerHTML = esc(r.SCHUL_NM) + "<small>" + esc(r.ATPT_OFCDC_SC_NM) + " · " + esc(r.ORG_RDNMA || "") + "</small>";
-      b.onclick = () => { school = {atpt:r.ATPT_OFCDC_SC_CODE, code:r.SD_SCHUL_CODE, name:r.SCHUL_NM, office:r.ATPT_OFCDC_SC_NM}; store.set("school", school); start(); };
+      b.onclick = () => { demo = false; school = {atpt:r.ATPT_OFCDC_SC_CODE, code:r.SD_SCHUL_CODE, name:r.SCHUL_NM, office:r.ATPT_OFCDC_SC_NM}; store.set("school", school); start(); };
       box.appendChild(b);
     });
+    if (!NEIS_KEY && rows.length >= 5) box.insertAdjacentHTML("afterbegin", '<div class="msg">결과가 5개까지만 보여요. 지역이나 학교 이름을 더 정확히 입력해 보세요.</div>');
   } catch(e){
     box.innerHTML = '<div class="msg err">검색에 실패했어요.<br>원인: ' + esc(e.message) + '<br>인터넷 연결, 인증키, 그리고 파일을 연 방법(GitHub Pages 주소로 열어야 해요)을 확인해 주세요.</div>';
   }
@@ -247,23 +281,22 @@ async function search(){
 /* 데이터 불러오기 */
 async function load(){
   $("#today").innerHTML = $("#go").innerHTML = '<div class="card msg">불러오는 중…</div>';
-  const now = new Date();
-  const mon = new Date(now); mon.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-  const f = new Date(now.getFullYear(), now.getMonth(), 1), l = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const base = {ATPT_OFCDC_SC_CODE:school.atpt, SD_SCHUL_CODE:school.code, MMEAL_SC_CODE:"2"};
+  const now = new Date(), mon = monday(now), sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  const f = new Date(now.getFullYear(), now.getMonth(), 1), l = new Date(now.getFullYear(), now.getMonth() + 1, 0), e2 = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+  const base = {ATPT_OFCDC_SC_CODE: school.atpt, SD_SCHUL_CODE: school.code};
+  const lo = ymd(mon < f ? mon : f), hi = ymd(sun > l ? sun : l);
   const jobs = await Promise.allSettled([
-    neis("mealServiceDietInfo", {...base, MLSV_FROM_YMD:ymd(mon), MLSV_TO_YMD:ymd(sun)}),
-    neis("mealServiceDietInfo", {...base, MLSV_FROM_YMD:ymd(f), MLSV_TO_YMD:ymd(l)}),
-    neis("SchoolSchedule", {ATPT_OFCDC_SC_CODE:school.atpt, SD_SCHUL_CODE:school.code, AA_FROM_YMD:ymd(f), AA_TO_YMD:ymd(new Date(now.getFullYear(), now.getMonth() + 2, 0))})
+    neisR("mealServiceDietInfo", {...base, MMEAL_SC_CODE: "2"}, "MLSV_FROM_YMD", "MLSV_TO_YMD", lo, hi),
+    neisR("SchoolSchedule", base, "AA_FROM_YMD", "AA_TO_YMD", ymd(f), ymd(e2))
   ]);
-  meals = jobs[0].status === "fulfilled" ? jobs[0].value : [];
-  monthMeals = jobs[1].status === "fulfilled" ? jobs[1].value : [];
-  monthEvents = jobs[2].status === "fulfilled" ? jobs[2].value : [];
-  await loadTT();
+  const all = jobs[0].status === "fulfilled" ? jobs[0].value : [];
+  meals = all.filter(r => r.MLSV_YMD >= ymd(mon) && r.MLSV_YMD <= ymd(sun));
+  monthMeals = all.filter(r => r.MLSV_YMD >= ymd(f) && r.MLSV_YMD <= ymd(l));
+  monthEvents = jobs[1].status === "fulfilled" ? jobs[1].value : [];
   if (jobs[0].status === "rejected" && jobs[1].status === "rejected"){
     $("#today").innerHTML = '<div class="card msg err">급식 정보를 불러오지 못했어요.<br>원인: ' + esc(jobs[0].reason.message) + "</div>"; $("#go").innerHTML = $("#today").innerHTML; return;
   }
+  await loadTT();
   renderToday(); renderTT(); renderEv(); renderWeek(); renderMonth(); renderMe(); renderGo(); renderBack();
   if (!opened){ opened = true; autoOpen(); }
 }
@@ -281,8 +314,14 @@ async function loadTT(){
   const now = new Date(), mon = monday(now), sun = new Date(mon); sun.setDate(mon.getDate() + 6);
   const ay = now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
   const sem = now.getMonth() >= 2 && now.getMonth() <= 7 ? "1" : "2";
+  const p = {ATPT_OFCDC_SC_CODE: school.atpt, SD_SCHUL_CODE: school.code, AY: String(ay), SEM: sem, GRADE: String(cfg.grade), CLASS_NM: String(cfg.cls), TI_FROM_YMD: ymd(mon), TI_TO_YMD: ymd(sun)};
   try {
-    ttRows = await neis(kind() + "Timetable", {ATPT_OFCDC_SC_CODE:school.atpt, SD_SCHUL_CODE:school.code, AY:String(ay), SEM:sem, GRADE:String(cfg.grade), CLASS_NM:String(cfg.cls), TI_FROM_YMD:ymd(mon), TI_TO_YMD:ymd(sun)});
+    if (NEIS_KEY || demo) ttRows = await neis(kind() + "Timetable", p);
+    else {
+      const parts = await Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(i => neis(kind() + "Timetable", {...p, PERIO: String(i)})));
+      const seen = new Set();
+      ttRows = parts.flat().filter(r => { const k = r.ALL_TI_YMD + "-" + r.PERIO; if (seen.has(k)) return false; seen.add(k); return true; });
+    }
   } catch(e){ ttErr = e.message; }
 }
 
@@ -339,7 +378,7 @@ function renderEv(){
   el.innerHTML = '<section class="card"><h2>학사 일정 (이번 달~다음 달)</h2>' + (list.length ? list.map(r => {
     const d = fromYmd(r.AA_YMD), n = Math.round((d - fromYmd(key)) / 86400000);
     return '<div class="row' + (n < 0 ? " past" : "") + '"><div class="d">' + (d.getMonth() + 1) + "/" + d.getDate() + "<small>" + dayName(d) + '요일</small></div><div><b>' + esc(r.EVENT_NM) + '</b><div class="msg">' + (n === 0 ? "오늘" : n > 0 ? "D-" + n : "지난 일정") + "</div></div></div>";
-  }).join("") : '<div class="msg">일정이 없거나 불러오지 못했어요.</div>') + "</section>" + (!NEIS_KEY ? '<div class="msg err">인증키가 없어서 5건만 보여요.</div>' : "");
+  }).join("") : '<div class="msg">일정이 없거나 불러오지 못했어요.</div>') + "</section>" + "";
 }
 
 /* 오늘 급식 */
@@ -446,7 +485,7 @@ function renderMonth(){
   const topD = Object.entries(cnt).filter(e => e[1] > 1).sort((a, b) => b[1] - a[1]).slice(0, 3).map(e => e[0] + " " + e[1] + "회").join(", ") || "아직 반복 메뉴 없음";
   const hot = monthMeals.slice().sort((a, b) => kcal(b) - kcal(a))[0];
   const stats = '<section class="card"><h2>이번 달 급식 통계</h2><div class="stats"><div class="stat"><b>' + avg + '</b><span>평균 kcal</span></div><div class="stat"><b>' + (hot ? Number(hot.MLSV_YMD.slice(6)) + "일" : "-") + '</b><span>열량 최고일</span></div><div class="stat"><b style="font-size:14px">' + esc(topD) + "</b><span>자주 나온 메뉴</span></div></div></section>";
-  const note = !NEIS_KEY && monthMeals.length <= 5 ? '<div class="msg err">인증키가 없어서 5일치만 보여요. 코드에 NEIS_KEY를 넣어 주세요.</div>' : "";
+  const note = "";
   $("#month").innerHTML = '<section class="card"><h2>' + (mo+1) + '월 급식 예보 달력</h2>' + note + '<div class="cal">' + cells + '</div></section><section class="card">' + det + "</section>" + stats;
   document.querySelectorAll("[data-day]").forEach(b => b.onclick = () => { selDay = b.dataset.day; renderMonth(); });
 }
@@ -493,7 +532,7 @@ function renderGo(){
   const dn = nextDd(); if (dn) tips.push(["", dn]);
   const hd = hwDue(); if (hd) tips.push(["w", hd]);
   if (hits.length) tips.push(["w", "오늘 급식에 내 알레르기 성분이 있어요: " + hits.map(h => ALG[h]).join(", ")]);
-  el.innerHTML = '<section class="card"><h2>등교까지</h2><div class="cd" id="cdGo"></div></section>' +
+  el.innerHTML = welcome() + '<section class="card"><h2>등교까지</h2><div class="cd" id="cdGo"></div></section>' +
     '<section class="card"><h2>오늘 챙길 과목</h2>' + (subj.length ? '<div class="chips">' + subj.map(x => '<span class="chip">' + esc(x) + "</span>").join("") + "</div>" : '<div class="msg">' + (n.getDay() % 6 ? "‘학교’의 시간표에서 학년과 반을 설정하면 과목이 나와요." : "오늘은 수업이 없는 날이에요.") + "</div>") + tipList(tips) + "</section>" + checklist("go", "등교 준비물");
   tick();
 }
@@ -711,10 +750,18 @@ function applyUi(){ document.body.style.zoom = [1, 1.12, 1.25][ui.size] || 1; do
 function renderSet(){
   const el = $("#set"); if (!el) return;
   el.innerHTML = '<section class="card"><h2>화면 설정</h2><div class="cfg"><label>글자 크기<select id="usize">' + ["보통", "크게", "아주 크게"].map((n, i) => '<option value="' + i + '"' + (ui.size === i ? " selected" : "") + ">" + n + "</option>").join("") + '</select></label><label>고대비 모드<select id="uhc"><option value="0"' + (ui.hc ? "" : " selected") + '>끄기</option><option value="1"' + (ui.hc ? " selected" : "") + '>켜기</option></select></label></div><div class="msg">누구나 편하게 볼 수 있도록 글자 크기와 대비를 바꿀 수 있어요.</div></section>' +
+    '<section class="card"><h2>나이스 인증키 (선택)</h2><div class="msg">키가 없어도 요청을 여러 번 나눠서 불러오기 때문에 대부분 볼 수 있지만, 조금 느릴 수 있어요. 인증키가 있으면 더 빠르고 안정적이에요. 키는 이 기기의 브라우저에만 저장되고, 앱 코드나 저장소에는 들어가지 않아요. 샘플 데이터로 둘러보기는 키 없이도 돼요.</div><div class="search" style="margin-top:8px"><input id="kin" type="password" autocomplete="off" value="' + esc(NEIS_KEY) + '" placeholder="발급받은 인증키" aria-label="나이스 인증키"><button class="btn" id="kv" type="button">저장</button></div><div class="msg" id="km"></div></section>' +
     '<section class="card"><h2>기록 백업과 복원</h2><div class="msg">기기를 바꿔도 기록을 옮길 수 있어요. 백업 코드를 만들어 보관해 두세요.</div><button class="btn" id="bk" type="button" style="margin-top:8px">백업 코드 만들기</button><textarea id="bkt" style="width:100%;height:80px;padding:8px 12px;margin-top:12px" aria-label="백업 코드"></textarea><button class="btn ghost" id="rs" type="button" style="margin-top:8px">이 코드로 복원하기</button><div class="msg" id="bkm"></div></section>';
+  $("#kv").onclick = () => {
+    const v = $("#kin").value.trim();
+    if (v && !/^[0-9a-zA-Z]{20,64}$/.test(v)){ $("#km").textContent = "인증키 형식이 맞지 않아요. 다시 확인해 주세요."; return; }
+    store.set("neisKey", v); NEIS_KEY = v;
+    $("#km").textContent = v ? "저장했어요. 학교를 다시 선택하면 적용돼요." : "인증키를 지웠어요.";
+    if (school && !demo) load();
+  };
   $("#bk").onclick = () => {
     try {
-      const o = {}; for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); o[k] = localStorage.getItem(k); }
+      const o = {}; for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); if (k !== "neisKey") o[k] = localStorage.getItem(k); }
       const c = btoa(unescape(encodeURIComponent(JSON.stringify(o)))); $("#bkt").value = c; $("#bkt").select();
       const fail = () => { $("#bkm").textContent = "코드를 만들었어요. 직접 복사해 주세요."; };
       try { navigator.clipboard.writeText(c).then(() => { $("#bkm").textContent = "코드를 만들고 복사했어요."; }, fail); } catch(e){ fail(); }
@@ -724,7 +771,7 @@ function renderSet(){
     try {
       const o = JSON.parse(decodeURIComponent(escape(atob($("#bkt").value.trim()))));
       if (typeof o !== "object" || !confirm("지금 기록을 이 코드의 내용으로 덮어써요. 계속할까요?")) return;
-      Object.keys(o).forEach(k => localStorage.setItem(k, o[k])); location.reload();
+      Object.keys(o).forEach(k => { if (k !== "neisKey") localStorage.setItem(k, o[k]); }); location.reload();
     } catch(e){ $("#bkm").textContent = "코드를 읽을 수 없어요. 다시 확인해 주세요."; }
   };
 }
@@ -734,6 +781,13 @@ document.addEventListener("change", e => {
   else return;
   store.set("ui", ui); applyUi();
 });
+
+/* 처음 사용 안내 */
+function welcome(){
+  if (store.get("welcome", false)) return "";
+  return '<section class="card" style="border-color:var(--main)"><h2>👋 처음 오셨나요?</h2><ol style="margin:0;padding-left:20px"><li>‘학교’의 시간표에서 학년과 반을 정해요.</li><li>‘급식’에서 알레르기 성분을 체크해요.</li><li>아래 메뉴에서 필요한 카테고리를 골라요. 지금 시각에 맞는 카테고리가 먼저 열려요.</li></ol><button class="btn" type="button" data-welcome="1" style="margin-top:12px">알겠어요</button></section>';
+}
+document.addEventListener("click", e => { if (e.target.closest("[data-welcome]")){ store.set("welcome", true); renderGo(); } });
 
 /* 알레르기 설정 */
 function buildAlgs(){
@@ -784,10 +838,11 @@ function start(){
   buildAlgs(); renderBank(); renderGame(); renderDd(); renderStudy(); renderHw(); renderSet(); show("go"); load();
 }
 $("#find").onclick = search;
+$("#demo").onclick = () => { demo = true; opened = false; school = {atpt: "X", code: "0", name: "샘플 학교 (체험용)", office: "서울특별시교육청"}; start(); };
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
 $("#change").onclick = () => { $("#picker").hidden = false; $("#main").hidden = true; };
 applyUi();
-if (school) start();
+if (school) start(); else search();
 </script>
 </body>
 </html>
